@@ -1,9 +1,14 @@
 #include <iostream>
 #include "WPILib.h"
 #include <CANTalon.h>
+#include "PixyTracker.hpp"
 #include <SmartDashboard/SmartDashboard.h>
 
 #define _USE_MATH_DEFINES
+
+const double PIXY_FIELD_OF_VIEW = 47.0;
+const double PIXY_IMAGE_HEIGHT_PIXELS = 240.0;
+
 
 class Robot: public IterativeRobot
 {
@@ -52,8 +57,17 @@ private:
 	Encoder 	 *rEnc;
 	RobotDrive 	 *drive;
 	Joystick 	 *stick;
-	AnalogAccelerometer *ax;
-	AnalogAccelerometer *az;
+	//AnalogAccelerometer *ax;
+	//AnalogAccelerometer *az;
+	Servo        *cameraTilt;
+
+	PixyTracker  *m_pixy;
+	int m_signature = 1;
+	PixyTracker::Target m_targets[2];
+
+	PIDController *launchController = NULL;
+	PIDController *gatherController = NULL;
+	PIDController *turnController   = NULL;
 
 	bool          testingLeft;
 	bool          testingRight;
@@ -61,6 +75,11 @@ private:
 	// PID coefficients
 	double       kLeftP, kLeftI, kLeftD, kLeftF, kLeftLowRPM, kLeftHighRPM;
 	double       kRightP, kRightI, kRightD, kRightF, kRightLowRPM, kRightHighRPM;
+	double       kGatherP, kGatherI, kGatherD, kGatherF;
+	double       kLaunchP, kLaunchI, kLaunchD, kLaunchF;
+	double       kTurnP, kTurnI, kTurnD, kTurnF;
+
+	double	kGatherAngle;
 
 	enum RobotState {
 		kOperatorControl,
@@ -72,6 +91,93 @@ private:
 	int stateTimer = 0;
 
 	Preferences *prefs;
+
+
+	// Output from the Turn PID Controller
+	class TurnPIDOutput : public PIDOutput {
+	public:
+		double correction = 0.0;
+		void PIDWrite(double output) {
+			correction = output;
+		}
+	} turnPIDOutput;
+
+	// Data source for the Turn PID Controller
+	class TurnPIDSource : public PIDSource {
+	public:
+		TurnPIDSource(PixyTracker *pixy, int signature, PixyTracker::Target *targets)
+	    : m_pixy(pixy),
+		  m_signature(signature),
+		  m_targets(targets) {}
+		double PIDGet() {
+			int count = m_pixy->getBlocksForSignature(m_signature, 1, m_targets);
+			if (count == 1) {
+				return (160.0 - m_targets[0].block.x);
+			}
+			return 0;
+		}
+	private:
+		PixyTracker *m_pixy;
+		int m_signature;
+		PixyTracker::Target *m_targets;
+	};
+
+	TurnPIDSource *turnPIDSource;
+
+
+	// Output from the Gather PID Controller
+	class GatherPIDOutput : public PIDOutput {
+	public:
+		double correction = 0.0;
+		void PIDWrite(double output) {
+			correction = output;
+		}
+	} gatherPIDOutput;
+
+	// Data source for the Gather PID Controller
+	class GatherPIDSource : public PIDSource {
+	public:
+		GatherPIDSource() {
+			ax = new AnalogAccelerometer(2);
+			az = new AnalogAccelerometer(3);
+		}
+		double PIDGet() {
+			double x = ax->GetAcceleration();
+			double z = az->GetAcceleration();
+			double g = sqrt(x*x+z*z);
+			return (90.0 + (180.0/M_PI)*asin(x/g));
+		}
+	private:
+		AnalogAccelerometer *ax;
+		AnalogAccelerometer *az;
+	} gatherPIDSource;
+
+	// Output from the Launch PID Controller
+	class LaunchPIDOutput : public PIDOutput {
+	public:
+		double correction = 0.0;
+		void PIDWrite(double output) {
+			correction = output;
+		}
+	} launchPIDOutput;
+
+	// Data source for the Launch PID Controller
+	class LaunchPIDSource : public PIDSource {
+	public:
+		LaunchPIDSource() {
+			ax = new AnalogAccelerometer(0);
+			az = new AnalogAccelerometer(1);
+		}
+		double PIDGet() {
+			double x = ax->GetAcceleration();
+			double z = az->GetAcceleration();
+			double g = sqrt(x*x+z*z);
+			return (90.0 + (180.0/M_PI)*asin(x/g));
+		}
+	private:
+		AnalogAccelerometer *ax;
+		AnalogAccelerometer *az;
+	} launchPIDSource;
 
 	// Read data from the Preferences Panel
 	void getPreferences()
@@ -90,15 +196,25 @@ private:
 		kRightLowRPM = prefs->GetDouble("kRightLowRPM", 1000.0);
 		kRightHighRPM = prefs->GetDouble("kRightHighRPM", 2400.0);
 
+		kLaunchP = prefs->GetDouble("kLaunchP", 0.0);
+		kLaunchI = prefs->GetDouble("kLaunchI", 0.0);
+		kLaunchD = prefs->GetDouble("kLaunchD", 0.0);
+		kLaunchF = prefs->GetDouble("kLaunchF", 0.0);
+
+		kGatherP = prefs->GetDouble("kGatherP", 0.0);
+		kGatherI = prefs->GetDouble("kGatherI", 0.0);
+		kGatherD = prefs->GetDouble("kGatherD", 0.0);
+		kGatherF = prefs->GetDouble("kGatherF", 0.0);
+
+		kTurnP = prefs->GetDouble("kTurnP", 0.0);
+		kTurnI = prefs->GetDouble("kTurnI", 0.0);
+		kTurnD = prefs->GetDouble("kTurnD", 0.0);
+		kTurnF = prefs->GetDouble("kTurnF", 0.0);
+
+		kGatherAngle = prefs->GetDouble("kGatherAngle", 0.0);
+
 		std::cout << kLeftHighRPM << " " << kRightHighRPM << std::endl;
 		std::cout << kLeftF << " " << kRightF << std::endl;
-	}
-
-	double getLauncherAngle() {
-		double x = ax->GetAcceleration();
-		double z = az->GetAcceleration();
-		double g = sqrt(x*x+z*z);
-		return  90.0 + (180.0/M_PI)*asin(x/g);
 	}
 
 	void stateOperatorControl() {
@@ -121,11 +237,25 @@ private:
 		bool button6 = stick->GetRawButton(6);
 		bool button3 = stick->GetRawButton(3);
 
+		/*------------------------GATHERER-----------------------*/
+		if (stick->GetRawAxis(2) != 0) {
+			gatherSpeed = stick->GetRawAxis(2);
+			std::cout << "Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
+		}
+		else if (stick->GetRawAxis(3) != 0) {
+			gatherSpeed = stick->GetRawAxis(3) * -1;
+			std::cout << "Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
+		}
+		else {
+			gatherSpeed = 0.0;
+		}
+		gatherer->Set(gatherSpeed);
+
 		if (button5 && !button6) {
 			elevator->Set(-0.5);
-			std::cout << "Angle: " << getLauncherAngle() << std::endl;
+			std::cout << "Angle: " << launchPIDSource.PIDGet() << std::endl;
 		} else if (button6 && !button5) {
-			std::cout << "Angle: " << getLauncherAngle() << std::endl;
+			std::cout << "Angle: " << launchPIDSource.PIDGet() << std::endl;
 			elevator->Set(0.5);
 		} else {
 			elevator->Set(0.0);
@@ -133,11 +263,15 @@ private:
 
 		if (button3 && !lastButton3) {
 			wheelsGathererIn = !wheelsGathererIn;
+			gatherController->SetSetpoint(kGatherAngle);
+			gatherController->Enable();
 		}
 		if (wheelsGathererIn) {
 			gathererWheels->Set(1.0);
+			gatherer->Set(-gatherPIDOutput.correction);
 		} else {
 			gathererWheels->Set(0.0);
+			gatherController->Disable();
 		}
 
 		if (button4 && !lastButton4) {
@@ -176,7 +310,7 @@ private:
 			}
 		} else if (shooterTimer > 50 && shooterTimer <= 65) {
 			shooterInOut->Set(-1.0);
-			std::cout << stateTimer << " angle: " << getLauncherAngle() << " right: " << rShooter->GetSpeed()
+			std::cout << stateTimer << " angle: " << launchPIDSource.PIDGet() << " right: " << rShooter->GetSpeed()
 								   << " left: " << lShooter->GetSpeed() << std::endl;
 		} else if (shooterTimer > 65 && shooterTimer <= 70) {
 			shooterInOut->Set(0.0);
@@ -189,6 +323,31 @@ private:
 			lShooter->Set(0.0);
 			shooterInOut->Set(0.0);
 		}
+	}
+
+	void resetPIDControllers() {
+		delete launchController;
+		delete gatherController;
+		delete turnController;
+
+		launchController = new PIDController(kLaunchP, kLaunchI, kLaunchD, kLaunchF, &launchPIDSource, &launchPIDOutput);
+		launchController->SetInputRange(21.0, 37.0);
+		launchController->SetOutputRange(-0.2, 0.2);
+		launchController->SetAbsoluteTolerance(0.05);
+		launchController->SetContinuous(false);
+
+		gatherController = new PIDController(kGatherP, kGatherI, kGatherD, kGatherF, &gatherPIDSource, &gatherPIDOutput);
+		gatherController->SetInputRange(-90.0, 90.0);
+		gatherController->SetOutputRange(-0.2, 0.2);
+		gatherController->SetAbsoluteTolerance(0.05);
+		gatherController->SetContinuous(false);
+
+		turnController = new PIDController(kTurnP, kTurnI, kTurnD, kTurnF, turnPIDSource, &turnPIDOutput);
+		turnController->SetInputRange(-160.0, 160.0);
+		turnController->SetOutputRange(-0.2, 0.2);
+		turnController->SetAbsoluteTolerance(0.05);
+		turnController->SetContinuous(false);
+
 	}
 
 	void RobotInit()
@@ -220,11 +379,18 @@ private:
 		lShooter->ConfigNominalOutputVoltage(0.0, 0.0);
 		lShooter->ConfigPeakOutputVoltage(12.0, -12.0);
 
-		ax = new AnalogAccelerometer(0);
-		az = new AnalogAccelerometer(1);
+		cameraTilt = new Servo(3);
+
+		//ax = new AnalogAccelerometer(0);
+		//az = new AnalogAccelerometer(1);
 
 		drive = new RobotDrive(backLeft, frontLeft, backRight, frontRight);
 		drive->SetSafetyEnabled(false);
+
+		m_pixy = new PixyTracker();
+		m_pixy->startVideo();
+
+		turnPIDSource = new TurnPIDSource(m_pixy, m_signature, m_targets);
 	}
 
 	void AutonomousInit()
@@ -273,10 +439,14 @@ private:
 		lShooter->SetP(kLeftP);
 		lShooter->SetI(kLeftI);
 		lShooter->SetD(kLeftD);
+
+		resetPIDControllers();
 	}
 
 	void TeleopPeriodic()
 	{
+		cameraTilt->Set(0.3);
+
 		switch (robotState) {
 		case kCentering:
 			stateCentering();
