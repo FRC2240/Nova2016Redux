@@ -353,6 +353,8 @@ void PixyTracker::render(uint8_t renderFlags, uint16_t width, uint16_t height, u
 }
 
 void PixyTracker::sendToDashboard(uint16_t width, uint16_t height) {
+	cv::line(m_image, cv::Point(160,0), cv::Point(160,240), cv::Scalar(0,0,255), 1);
+
 	// Draw target bounding boxes
 	for (int i=0; i<m_target_count; i++) {
 		cv::rectangle(m_image,

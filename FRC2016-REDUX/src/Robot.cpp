@@ -73,11 +73,13 @@ private:
 	bool          testingRight;
 
 	// PID coefficients
-	double       kLeftP, kLeftI, kLeftD, kLeftF, kLeftLowRPM, kLeftHighRPM;
-	double       kRightP, kRightI, kRightD, kRightF, kRightLowRPM, kRightHighRPM;
-	double       kGatherP, kGatherI, kGatherD, kGatherF;
-	double       kLaunchP, kLaunchI, kLaunchD, kLaunchF;
-	double       kTurnP, kTurnI, kTurnD, kTurnF;
+	double      kLeftP, kLeftI, kLeftD, kLeftF, kLeftLowRPM, kLeftHighRPM;
+	double      kRightP, kRightI, kRightD, kRightF, kRightLowRPM, kRightHighRPM;
+	double      kGatherP, kGatherI, kGatherD, kGatherF;
+	double		kLaunchP, kLaunchI, kLaunchD, kLaunchF;
+	double      kTurnP, kTurnI, kTurnD, kTurnF;
+	double		kLaunchMinAngle, kLaunchMaxAngle, kLaunchAngle;
+	double		kCoeff0, kCoeff1;
 
 	double	kGatherAngle;
 
@@ -106,17 +108,29 @@ private:
 	class TurnPIDSource : public PIDSource {
 	public:
 		TurnPIDSource(PixyTracker *pixy, int signature, PixyTracker::Target *targets)
-	    : m_pixy(pixy),
+	    : m_isAcquired(false),
+		  m_pixy(pixy),
 		  m_signature(signature),
 		  m_targets(targets) {}
 		double PIDGet() {
 			int count = m_pixy->getBlocksForSignature(m_signature, 1, m_targets);
 			if (count == 1) {
+				//std::cout << "x: " << m_targets[0].block.x << " y: " << m_targets[0].block.y
+				//		  << " h: " << m_targets[0].block.height << " w: " << m_targets[0].block.width <<std::endl;
+				m_isAcquired = true;
 				return (160.0 - m_targets[0].block.x);
 			}
+			m_isAcquired = false;
 			return 0;
 		}
+		bool acquired() {
+			return m_isAcquired;
+		}
+		void reset() {
+			m_isAcquired = false;
+		}
 	private:
+		bool m_isAcquired;
 		PixyTracker *m_pixy;
 		int m_signature;
 		PixyTracker::Target *m_targets;
@@ -213,31 +227,43 @@ private:
 
 		kGatherAngle = prefs->GetDouble("kGatherAngle", 0.0);
 
+		kLaunchMinAngle = prefs->GetDouble("kLaunchMinAngle", 0.0);
+		kLaunchMaxAngle = prefs->GetDouble("kLaunchMaxAngle", 0.0);
+		kLaunchAngle = prefs->GetDouble("kLaunchAngle", 30.0);
+
+		kCoeff0 = prefs->GetDouble("kCoeff0", 0.144);
+		kCoeff1 = prefs->GetDouble("kCoeff1", 19.8);
+
 		std::cout << kLeftHighRPM << " " << kRightHighRPM << std::endl;
 		std::cout << kLeftF << " " << kRightF << std::endl;
 	}
 
+	double calcLaunchAngle(double y) {
+		return kCoeff0*y + kCoeff1;
+	}
+
 	void stateOperatorControl() {
-		/*------------------------DRIVING------------------------*/
+		// DRIVING
 		move = stick->GetRawAxis(1) * -1.0;
 		rotate = stick->GetRawAxis(4) * -1.0;
 
-		// deadband
+		// Deadband
 		if (fabs(move) < 0.1) {
 			move = 0.0;
 		}
-		if (fabs(rotate) < 0.1) {
+		if (fabs(rotate) < 0.15) {
 			rotate = 0.0;
 		}
 		drive->ArcadeDrive(move, rotate, false);
 
+		// Joystick Buttons
 		bool button4 = stick->GetRawButton(4);
 		bool button1 = stick->GetRawButton(1);
 		bool button5 = stick->GetRawButton(5);
 		bool button6 = stick->GetRawButton(6);
 		bool button3 = stick->GetRawButton(3);
 
-		/*------------------------GATHERER-----------------------*/
+		// Manual Gatherer
 		if (stick->GetRawAxis(2) != 0) {
 			gatherSpeed = stick->GetRawAxis(2);
 			std::cout << "Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
@@ -251,16 +277,19 @@ private:
 		}
 		gatherer->Set(gatherSpeed);
 
-		if (button5 && !button6) {
-			elevator->Set(-0.5);
-			std::cout << "Angle: " << launchPIDSource.PIDGet() << std::endl;
-		} else if (button6 && !button5) {
-			std::cout << "Angle: " << launchPIDSource.PIDGet() << std::endl;
-			elevator->Set(0.5);
+		// Launch Angle
+		double launcherAngle = launchPIDSource.PIDGet();
+		if (button5 && !button6  && (launcherAngle < kLaunchMaxAngle)) {
+			elevator->Set(-0.5); // Up
+			std::cout << "Angle5: " << launcherAngle << std::endl;
+		} else if (button6 && !button5 && (launcherAngle > kLaunchMinAngle)) {
+			std::cout << "Angle6: " << launcherAngle << std::endl;
+			elevator->Set(0.5); // Down
 		} else {
 			elevator->Set(0.0);
 		}
 
+		// Auto-Gather
 		if (button3 && !lastButton3) {
 			wheelsGathererIn = !wheelsGathererIn;
 			gatherController->SetSetpoint(kGatherAngle);
@@ -268,7 +297,9 @@ private:
 		}
 		if (wheelsGathererIn) {
 			gathererWheels->Set(1.0);
-			gatherer->Set(-gatherPIDOutput.correction);
+			gatherer->Set(gatherPIDOutput.correction);
+			std::cout << "Gather Correction: " << gatherPIDOutput.correction
+					  << " Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
 		} else {
 			gathererWheels->Set(0.0);
 			gatherController->Disable();
@@ -282,7 +313,7 @@ private:
 		if (button1 && !lastButton1) {
 			stateTimer   = 0;
 			robotState   = kLaunching;
-			shootingHigh = false;
+			shootingHigh = true;
 		}
 		lastButton4 = button4;
 		lastButton1 = button1;
@@ -290,17 +321,90 @@ private:
 	}
 
 	void stateCentering() {
-		robotState = kAiming;
+		stateTimer++;
+
+		if (stateTimer == 1) {
+			turnController->SetSetpoint(0.0);
+			turnController->Enable();
+			return;
+		} else if (stateTimer < 5) {
+			return;
+	    } else if (stateTimer < 100) {
+			if (!turnPIDSource->acquired()) {
+				robotState = kOperatorControl;
+				turnController->Disable();
+				turnPIDSource->reset();
+				std::cout << "no target\n";
+				return;
+			}
+			drive->ArcadeDrive(0.0, -turnPIDOutput.correction, false);
+			std::cout << stateTimer << " " << turnController->GetSetpoint() << " " << turnPIDSource->PIDGet() << " "
+					  << turnPIDOutput.correction << std::endl;
+
+			if ((fabs(turnPIDOutput.correction) < 0.06) && (fabs(turnPIDSource->PIDGet()) < 4)) {
+				drive->ArcadeDrive(0.0, 0.0, false);
+				turnController->Disable();
+				robotState = kAiming;
+				stateTimer = 0;
+				turnPIDSource->reset();
+			}
+		} else {
+			turnController->Disable();
+			turnPIDSource->reset();
+			drive->ArcadeDrive(0.0, 0.0, false);
+			robotState = kOperatorControl;
+			std::cout << "Centering Failed: " << "time: " << stateTimer << "correction: "
+					  << turnPIDOutput.correction << std::endl;
+			//stateTimer = 0;
+		}
 	}
 
 	void stateAiming() {
-		robotState = kLaunching;
+		stateTimer++;
+		if (stateTimer == 1) {
+			// calculate launcher angle
+			double angle = calcLaunchAngle(m_targets[0].block.y);
+			std::cout << "Setting Launch Angle: " << angle << std::endl;
+
+			launchController->SetSetpoint(angle);
+			launchController->Enable();
+			return;
+		} else if (stateTimer < 5) {
+			return;
+		} else if (stateTimer < 150) {
+			std::cout << "angle: " << launchController->GetSetpoint() << " " << launchPIDSource.PIDGet() << " "
+					  << launchPIDOutput.correction << std::endl;
+			elevator->Set(-launchPIDOutput.correction);
+
+			if ((fabs(launchPIDOutput.correction) < 0.08) &&
+				(fabs(launchPIDSource.PIDGet()-launchController->GetSetpoint()) < 0.3)) {
+				elevator->Set(0.0);
+				launchController->Disable();
+				robotState = kLaunching;
+				stateTimer = 0;
+
+				std::cout << "angle: " << launchController->GetSetpoint() << " " << launchPIDSource.PIDGet() << " "
+						  << launchPIDOutput.correction << std::endl;
+
+				std::cout << "x: " << m_targets[0].block.x << " y: " << m_targets[0].block.y
+						  << " h: " << m_targets[0].block.height << " w: " << m_targets[0].block.width << std::endl;
+			}
+		} else {
+			launchController->Disable();
+			elevator->Set(0.0);
+			robotState = kOperatorControl;
+			//stateTimer = 0;
+			std::cout << "Aiming Failed: " << "time: " << stateTimer << " correction: "
+					  << launchPIDOutput.correction << std::endl;
+
+			//std::cout << "x: " << m_targets[0].block.x << " y: " << m_targets[0].block.y
+			//		  << " h: " << m_targets[0].block.height << " w: " << m_targets[0].block.width << std::endl;
+		}
 	}
 
 	void stateLaunching() {
 		stateTimer++;
-
-		if (stateTimer == 0) {
+		if (stateTimer == 1) {
 			if (shootingHigh) {
 				rShooter->Set(kRightHighRPM);
 				lShooter->Set(kLeftHighRPM);
@@ -308,20 +412,21 @@ private:
 				rShooter->Set(kRightLowRPM);
 				lShooter->Set(kLeftLowRPM);
 			}
-		} else if (shooterTimer > 50 && shooterTimer <= 65) {
+		} else if (stateTimer > 50 && stateTimer <= 65) {
 			shooterInOut->Set(-1.0);
 			std::cout << stateTimer << " angle: " << launchPIDSource.PIDGet() << " right: " << rShooter->GetSpeed()
-								   << " left: " << lShooter->GetSpeed() << std::endl;
-		} else if (shooterTimer > 65 && shooterTimer <= 70) {
+					  << " left: " << lShooter->GetSpeed() << std::endl;
+		} else if (stateTimer > 65 && stateTimer <= 70) {
 			shooterInOut->Set(0.0);
-		} else if (shooterTimer > 70 && shooterTimer <= 75) {
+		} else if (stateTimer > 70 && stateTimer <= 75) {
 			shooterInOut->Set(0.6);
-		} else if (shooterTimer > 75) {
+		} else if (stateTimer > 75) {
 			shootingHigh = false;
-			shooterTimer = 0;
+			stateTimer = 0;
 			rShooter->Set(0.0);
 			lShooter->Set(0.0);
 			shooterInOut->Set(0.0);
+			robotState = kOperatorControl;
 		}
 	}
 
@@ -332,19 +437,19 @@ private:
 
 		launchController = new PIDController(kLaunchP, kLaunchI, kLaunchD, kLaunchF, &launchPIDSource, &launchPIDOutput);
 		launchController->SetInputRange(21.0, 37.0);
-		launchController->SetOutputRange(-0.2, 0.2);
+		launchController->SetOutputRange(-0.5, 0.5);
 		launchController->SetAbsoluteTolerance(0.05);
 		launchController->SetContinuous(false);
 
 		gatherController = new PIDController(kGatherP, kGatherI, kGatherD, kGatherF, &gatherPIDSource, &gatherPIDOutput);
-		gatherController->SetInputRange(-90.0, 90.0);
-		gatherController->SetOutputRange(-0.2, 0.2);
-		gatherController->SetAbsoluteTolerance(0.05);
+		gatherController->SetInputRange(0.0, 180.0);
+		gatherController->SetOutputRange(-0.5, 0.5);
+		gatherController->SetAbsoluteTolerance(0.1);
 		gatherController->SetContinuous(false);
 
 		turnController = new PIDController(kTurnP, kTurnI, kTurnD, kTurnF, turnPIDSource, &turnPIDOutput);
 		turnController->SetInputRange(-160.0, 160.0);
-		turnController->SetOutputRange(-0.2, 0.2);
+		turnController->SetOutputRange(-0.32, 0.32);
 		turnController->SetAbsoluteTolerance(0.05);
 		turnController->SetContinuous(false);
 
