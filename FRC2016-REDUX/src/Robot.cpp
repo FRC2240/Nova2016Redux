@@ -3,6 +3,7 @@
 #include <CANTalon.h>
 #include "PixyTracker.hpp"
 #include <SmartDashboard/SmartDashboard.h>
+#include "log.h"
 
 #define _USE_MATH_DEFINES
 
@@ -80,6 +81,7 @@ private:
 	double      kTurnP, kTurnI, kTurnD, kTurnF;
 	double		kLaunchMinAngle, kLaunchMaxAngle, kLaunchAngle;
 	double		kCoeff0, kCoeff1;
+	std::string kLogLevel;
 
 	double	kGatherAngle;
 
@@ -196,46 +198,49 @@ private:
 	// Read data from the Preferences Panel
 	void getPreferences()
 	{
-		kLeftP = prefs->GetDouble("kLeftP", 0.0);
+		kLeftP = prefs->GetDouble("kLeftP", 0.025);
 		kLeftI = prefs->GetDouble("kLeftI", 0.0);
-		kLeftD = prefs->GetDouble("kLeftD", 0.0);
-		kLeftF = prefs->GetDouble("kLeftF", 0.08);
+		kLeftD = prefs->GetDouble("kLeftD", 0.2);
+		kLeftF = prefs->GetDouble("kLeftF", 0.03);
 		kLeftLowRPM = prefs->GetDouble("kLeftLowRPM", -1000.0);
 		kLeftHighRPM = prefs->GetDouble("kLeftHighRPM", -2400.0);
 
-		kRightP = prefs->GetDouble("kRightP", 0.0);
+		kRightP = prefs->GetDouble("kRightP", 0.025);
 		kRightI = prefs->GetDouble("kRightI", 0.0);
-		kRightD = prefs->GetDouble("kRightD", 0.0);
-		kRightF = prefs->GetDouble("kRightF", 0.08);
+		kRightD = prefs->GetDouble("kRightD", 0.2);
+		kRightF = prefs->GetDouble("kRightF", 0.03);
 		kRightLowRPM = prefs->GetDouble("kRightLowRPM", 1000.0);
 		kRightHighRPM = prefs->GetDouble("kRightHighRPM", 2400.0);
 
-		kLaunchP = prefs->GetDouble("kLaunchP", 0.0);
-		kLaunchI = prefs->GetDouble("kLaunchI", 0.0);
-		kLaunchD = prefs->GetDouble("kLaunchD", 0.0);
+		kLaunchP = prefs->GetDouble("kLaunchP", 0.2);
+		kLaunchI = prefs->GetDouble("kLaunchI", 0.004);
+		kLaunchD = prefs->GetDouble("kLaunchD", 0.5);
 		kLaunchF = prefs->GetDouble("kLaunchF", 0.0);
 
-		kGatherP = prefs->GetDouble("kGatherP", 0.0);
+		kGatherP = prefs->GetDouble("kGatherP", 0.05);
 		kGatherI = prefs->GetDouble("kGatherI", 0.0);
-		kGatherD = prefs->GetDouble("kGatherD", 0.0);
+		kGatherD = prefs->GetDouble("kGatherD", 0.1);
 		kGatherF = prefs->GetDouble("kGatherF", 0.0);
 
-		kTurnP = prefs->GetDouble("kTurnP", 0.0);
-		kTurnI = prefs->GetDouble("kTurnI", 0.0);
-		kTurnD = prefs->GetDouble("kTurnD", 0.0);
+		kTurnP = prefs->GetDouble("kTurnP", 0.025);
+		kTurnI = prefs->GetDouble("kTurnI", 0.004);
+		kTurnD = prefs->GetDouble("kTurnD", 0.06);
 		kTurnF = prefs->GetDouble("kTurnF", 0.0);
 
-		kGatherAngle = prefs->GetDouble("kGatherAngle", 0.0);
+		kGatherAngle = prefs->GetDouble("kGatherAngle", 113.0);
 
-		kLaunchMinAngle = prefs->GetDouble("kLaunchMinAngle", 0.0);
-		kLaunchMaxAngle = prefs->GetDouble("kLaunchMaxAngle", 0.0);
+		kLaunchMinAngle = prefs->GetDouble("kLaunchMinAngle", 23.5);
+		kLaunchMaxAngle = prefs->GetDouble("kLaunchMaxAngle", 36.7);
 		kLaunchAngle = prefs->GetDouble("kLaunchAngle", 30.0);
 
 		kCoeff0 = prefs->GetDouble("kCoeff0", 0.144);
 		kCoeff1 = prefs->GetDouble("kCoeff1", 19.8);
 
-		std::cout << kLeftHighRPM << " " << kRightHighRPM << std::endl;
-		std::cout << kLeftF << " " << kRightF << std::endl;
+		kLogLevel = prefs->GetString("kLogLevel", "INFO");
+
+		Log::SetLevel(Log::FromString(kLogLevel));
+
+		LOGGER(INFO) << "[getPreferences] LeftRPM:" << kLeftHighRPM << " RightRPM: " << kRightHighRPM;
 	}
 
 	double calcLaunchAngle(double y) {
@@ -266,11 +271,12 @@ private:
 		// Manual Gatherer
 		if (stick->GetRawAxis(2) != 0) {
 			gatherSpeed = stick->GetRawAxis(2);
-			std::cout << "Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
+			LOGGER(DEBUG) << "[stateOperatorControl] Gather Angle:" << gatherPIDSource.PIDGet();
+
 		}
 		else if (stick->GetRawAxis(3) != 0) {
 			gatherSpeed = stick->GetRawAxis(3) * -1;
-			std::cout << "Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
+			LOGGER(DEBUG) << "[stateOperatorControl] Gather Angle:" << gatherPIDSource.PIDGet();
 		}
 		else {
 			gatherSpeed = 0.0;
@@ -281,9 +287,9 @@ private:
 		double launcherAngle = launchPIDSource.PIDGet();
 		if (button5 && !button6  && (launcherAngle < kLaunchMaxAngle)) {
 			elevator->Set(-0.5); // Up
-			std::cout << "Angle5: " << launcherAngle << std::endl;
+			LOGGER(DEBUG) << "[stateOperatorControl] Launcher Angle:" << launcherAngle;
 		} else if (button6 && !button5 && (launcherAngle > kLaunchMinAngle)) {
-			std::cout << "Angle6: " << launcherAngle << std::endl;
+			LOGGER(DEBUG) << "[stateOperatorControl] Launcher Angle:" << launcherAngle;
 			elevator->Set(0.5); // Down
 		} else {
 			elevator->Set(0.0);
@@ -298,8 +304,8 @@ private:
 		if (wheelsGathererIn) {
 			gathererWheels->Set(1.0);
 			gatherer->Set(gatherPIDOutput.correction);
-			std::cout << "Gather Correction: " << gatherPIDOutput.correction
-					  << " Gather Angle: " << gatherPIDSource.PIDGet() << std::endl;
+			LOGGER(DEBUG) << "[stateOperatorControl] Gather Correction:" << gatherPIDOutput.correction
+					      << " Gather Angle: " << gatherPIDSource.PIDGet();
 		} else {
 			gathererWheels->Set(0.0);
 			gatherController->Disable();
@@ -327,21 +333,21 @@ private:
 			turnController->SetSetpoint(0.0);
 			turnController->Enable();
 			return;
-		} else if (stateTimer < 5) {
+		} else if (stateTimer < 10) {
 			return;
-	    } else if (stateTimer < 100) {
+	    } else if (stateTimer < 120) {
 			if (!turnPIDSource->acquired()) {
 				robotState = kOperatorControl;
 				turnController->Disable();
 				turnPIDSource->reset();
-				std::cout << "no target\n";
+				LOGGER(ERROR) << "[stateCentering] No Target Found";
 				return;
 			}
 			drive->ArcadeDrive(0.0, -turnPIDOutput.correction, false);
-			std::cout << stateTimer << " " << turnController->GetSetpoint() << " " << turnPIDSource->PIDGet() << " "
-					  << turnPIDOutput.correction << std::endl;
+			LOGGER(DEBUG) << "[stateCentering] Timer: " << stateTimer << " SetPoint: " << turnController->GetSetpoint()
+					      << " Offset: " << turnPIDSource->PIDGet() << " Correction: " << turnPIDOutput.correction;
 
-			if ((fabs(turnPIDOutput.correction) < 0.06) && (fabs(turnPIDSource->PIDGet()) < 4)) {
+			if ((fabs(turnPIDOutput.correction) < 0.10) && (fabs(turnPIDSource->PIDGet()) < 3)) {
 				drive->ArcadeDrive(0.0, 0.0, false);
 				turnController->Disable();
 				robotState = kAiming;
@@ -353,9 +359,8 @@ private:
 			turnPIDSource->reset();
 			drive->ArcadeDrive(0.0, 0.0, false);
 			robotState = kOperatorControl;
-			std::cout << "Centering Failed: " << "time: " << stateTimer << "correction: "
-					  << turnPIDOutput.correction << std::endl;
-			//stateTimer = 0;
+			LOGGER(ERROR) << "[stateCentering] FAILED, Timer: " << stateTimer << " SetPoint: " << turnController->GetSetpoint()
+				          << " Offset: " << turnPIDSource->PIDGet() << " Correction: " << turnPIDOutput.correction;
 		}
 	}
 
@@ -364,7 +369,13 @@ private:
 		if (stateTimer == 1) {
 			// calculate launcher angle
 			double angle = calcLaunchAngle(m_targets[0].block.y);
-			std::cout << "Setting Launch Angle: " << angle << std::endl;
+			LOGGER(INFO) << "[stateAiming] Setting Launch Angle: " << angle;
+
+			if (angle > 46.0) {
+				LOGGER(ERROR) << "[stateAiming] Target is out of range";
+				robotState = kOperatorControl;
+				return;
+			}
 
 			launchController->SetSetpoint(angle);
 			launchController->Enable();
@@ -372,33 +383,26 @@ private:
 		} else if (stateTimer < 5) {
 			return;
 		} else if (stateTimer < 150) {
-			std::cout << "angle: " << launchController->GetSetpoint() << " " << launchPIDSource.PIDGet() << " "
-					  << launchPIDOutput.correction << std::endl;
+			LOGGER(DEBUG) << "[stateAiming] Timer: " << stateTimer << " SetPoint: " << launchController->GetSetpoint()
+					      << " Angle: " << launchPIDSource.PIDGet() << " Correction: " << launchPIDOutput.correction;
 			elevator->Set(-launchPIDOutput.correction);
 
-			if ((fabs(launchPIDOutput.correction) < 0.08) &&
-				(fabs(launchPIDSource.PIDGet()-launchController->GetSetpoint()) < 0.3)) {
+			if ((fabs(launchPIDOutput.correction) < 0.2) &&
+				(fabs(launchPIDSource.PIDGet()-launchController->GetSetpoint()) < 0.25)) {
 				elevator->Set(0.0);
 				launchController->Disable();
 				robotState = kLaunching;
 				stateTimer = 0;
 
-				std::cout << "angle: " << launchController->GetSetpoint() << " " << launchPIDSource.PIDGet() << " "
-						  << launchPIDOutput.correction << std::endl;
-
-				std::cout << "x: " << m_targets[0].block.x << " y: " << m_targets[0].block.y
-						  << " h: " << m_targets[0].block.height << " w: " << m_targets[0].block.width << std::endl;
+				LOGGER(DEBUG) << "[stateAiming] Target x: " << m_targets[0].block.x << " y: " << m_targets[0].block.y
+						      << " h: " << m_targets[0].block.height << " w: " << m_targets[0].block.width;
 			}
 		} else {
 			launchController->Disable();
 			elevator->Set(0.0);
 			robotState = kOperatorControl;
-			//stateTimer = 0;
-			std::cout << "Aiming Failed: " << "time: " << stateTimer << " correction: "
-					  << launchPIDOutput.correction << std::endl;
-
-			//std::cout << "x: " << m_targets[0].block.x << " y: " << m_targets[0].block.y
-			//		  << " h: " << m_targets[0].block.height << " w: " << m_targets[0].block.width << std::endl;
+			LOGGER(ERROR) << "[stateAiming] Aiming Failed, Timer: " << stateTimer << " Correction: "
+					      << launchPIDOutput.correction;
 		}
 	}
 
@@ -414,8 +418,8 @@ private:
 			}
 		} else if (stateTimer > 50 && stateTimer <= 65) {
 			shooterInOut->Set(-1.0);
-			std::cout << stateTimer << " angle: " << launchPIDSource.PIDGet() << " right: " << rShooter->GetSpeed()
-					  << " left: " << lShooter->GetSpeed() << std::endl;
+			LOGGER(DEBUG) << "[stateLaunching] Timer: " << stateTimer << " Angle: " << launchPIDSource.PIDGet()
+					      << " Right RPM: " << rShooter->GetSpeed() << " Left RPM: " << lShooter->GetSpeed();
 		} else if (stateTimer > 65 && stateTimer <= 70) {
 			shooterInOut->Set(0.0);
 		} else if (stateTimer > 70 && stateTimer <= 75) {
@@ -436,8 +440,8 @@ private:
 		delete turnController;
 
 		launchController = new PIDController(kLaunchP, kLaunchI, kLaunchD, kLaunchF, &launchPIDSource, &launchPIDOutput);
-		launchController->SetInputRange(21.0, 37.0);
-		launchController->SetOutputRange(-0.5, 0.5);
+		launchController->SetInputRange(kLaunchMinAngle, kLaunchMaxAngle);
+		launchController->SetOutputRange(-1.0, 1.0);
 		launchController->SetAbsoluteTolerance(0.05);
 		launchController->SetContinuous(false);
 
@@ -449,7 +453,7 @@ private:
 
 		turnController = new PIDController(kTurnP, kTurnI, kTurnD, kTurnF, turnPIDSource, &turnPIDOutput);
 		turnController->SetInputRange(-160.0, 160.0);
-		turnController->SetOutputRange(-0.32, 0.32);
+		turnController->SetOutputRange(-0.4, 0.4);
 		turnController->SetAbsoluteTolerance(0.05);
 		turnController->SetContinuous(false);
 
@@ -485,9 +489,6 @@ private:
 		lShooter->ConfigPeakOutputVoltage(12.0, -12.0);
 
 		cameraTilt = new Servo(3);
-
-		//ax = new AnalogAccelerometer(0);
-		//az = new AnalogAccelerometer(1);
 
 		drive = new RobotDrive(backLeft, frontLeft, backRight, frontRight);
 		drive->SetSafetyEnabled(false);
